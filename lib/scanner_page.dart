@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:http/http.dart' as http;
@@ -1187,24 +1185,16 @@ class _QRScannerPageState extends State<QRScannerPage> {
               final bool hasWarnings = (!isDateMatch || !isTimeMatch || isExited) && !(isEntered && !isExited);
               
               // Determine the status icon and colors
-              Widget statusIcon;
-              Color statusColor;
               List<Color> gradientColors;
               
               if (hasWarnings) {
                 // Warning icon
-                statusIcon = const Icon(Icons.warning_rounded, size: 60, color: Colors.white);
-                statusColor = Colors.orange;
                 gradientColors = [Colors.orange.shade300, Colors.orange.shade500];
               } else if (isEntered) {
                 // Exit icon
-                statusIcon = const Icon(Icons.exit_to_app, size: 60, color: Colors.white);
-                statusColor = Colors.red;
                 gradientColors = [Colors.red.shade300, Colors.red.shade500];
               } else {
                 // Entry icon
-                statusIcon = const Icon(Icons.login_rounded, size: 60, color: Colors.white);
-                statusColor = Colors.green;
                 gradientColors = [Colors.green.shade300, Colors.green.shade500];
               }
               
@@ -1514,14 +1504,14 @@ class _QRScannerPageState extends State<QRScannerPage> {
   // Add vibration feedback methods
   Future<void> _vibrateOnSuccess() async {
     // Check if device supports vibration
-    if (await Vibration.hasVibrator() ?? false) {
+    if (await Vibration.hasVibrator()) {
       Vibration.vibrate(duration: 200);
     }
   }
   
   Future<void> _vibrateOnError() async {
     // Check if device supports vibration
-    if (await Vibration.hasVibrator() ?? false) {
+    if (await Vibration.hasVibrator()) {
       // Pattern for error: short, pause, short
       Vibration.vibrate(pattern: [100, 100, 100]);
     }

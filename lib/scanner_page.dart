@@ -1255,7 +1255,6 @@ class _QRScannerPageState extends State<QRScannerPage> {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final boxWidth = constraints.maxWidth;
-                final boxHeight = constraints.maxHeight;
                 
                 return FutureBuilder<List<dynamic>>(
                   future: isCellChecked(int.parse(queueNumber) + (rowStart - 1) - (timeSlotTicketCount * ((int.parse(queueNumber) - 1) ~/ timeSlotTicketCount)), _columnLetterToNumber(columnStart) + (((int.parse(queueNumber) - 1) ~/ timeSlotTicketCount) * timeSlotColumnSpacing), date),

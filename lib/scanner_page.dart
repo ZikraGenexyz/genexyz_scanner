@@ -22,6 +22,9 @@ class _QRScannerPageState extends State<QRScannerPage> {
   bool showInvalidQRWarning = false;
   Timer? _warningTimer;
   bool isScannerActive = true; // This will control whether to process scans
+  bool isSending = false;
+  bool isSuccess = false;
+  bool isFailed = false;
   
   // Settings variables with default values
   String columnStart = "C"; // Default column (F)
@@ -107,7 +110,7 @@ class _QRScannerPageState extends State<QRScannerPage> {
     super.dispose();
   }
 
-  Future<void> sendDataToSheet({
+  Future<bool> sendDataToSheet({
     required int row,
     required int col,
     String value = '✅',
@@ -126,31 +129,39 @@ class _QRScannerPageState extends State<QRScannerPage> {
         },
       );
 
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 || response.statusCode == 302) {
         print('Sheet update success: ${response.body}');
+        return true;
       } else {
         print('Sheet update failed: ${response.statusCode}');
+        return false;
       }
     } catch (e) {
       print('Error hitting sheet endpoint: $e');
+      return false;
     }
   }
 
   Future<List<dynamic>> isCellChecked(int row, int col, String sheetName) async {
-    final url = Uri.parse(
-      'https://script.google.com/macros/s/AKfycbwfZ-AbmRPruwQY6KBK-zttEWMrUauup-sKFXykpwnYn46vOjP3GwIDJwmAyVwSi-v5bw/exec?row=$row&col=$col&sheetName=$sheetName',
-    );
+    try {
+      final url = Uri.parse(
+        'https://script.google.com/macros/s/AKfycbwfZ-AbmRPruwQY6KBK-zttEWMrUauup-sKFXykpwnYn46vOjP3GwIDJwmAyVwSi-v5bw/exec?row=$row&col=$col&sheetName=$sheetName',
+      );
 
-    final response = await http.get(url);
+      final response = await http.get(url);
 
-    if (response.statusCode == 200) {
-      final body = response.body.trim();
+      if (response.statusCode == 200) {
+        final body = response.body.trim();
 
-      final data = body.split('/');
+        final data = body.split('/');
 
-      return [data[0] == 'Checked', data[1] == 'Checked', data[2]];
-    } else {
-      throw Exception('Failed to read cell: ${response.body}');
+        return [data[0] == 'Checked', data[1] == 'Checked', data[2]];
+      } else {
+        return [false, false, 'error'];
+      }
+    } catch (e) {
+      print('Error hitting sheet endpoint: $e');
+      return [false, false, 'error'];
     }
   }
   
@@ -1242,6 +1253,9 @@ class _QRScannerPageState extends State<QRScannerPage> {
           setState(() {
             isDialogShowing = false;
             isScannerActive = true;
+            isSending = false;
+            isSuccess = false;
+            isFailed = false;
           });
           return false;
         },
@@ -1251,7 +1265,7 @@ class _QRScannerPageState extends State<QRScannerPage> {
           backgroundColor: AppColors.backgroundLight,
           child: ConstrainedBox(
             key: _boxKey,
-            constraints: BoxConstraints(maxWidth: 450),
+            constraints: BoxConstraints(maxWidth: 500),
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final boxWidth = constraints.maxWidth;
@@ -1264,10 +1278,12 @@ class _QRScannerPageState extends State<QRScannerPage> {
                     
                     // Show loading indicator while waiting
                     if (snapshot.connectionState == ConnectionState.waiting) {
-                      return SizedBox(
-                        height: 150,
+                      return Container(
+                        padding: EdgeInsets.symmetric(vertical: boxWidth * 0.1),
+                        constraints: BoxConstraints(maxWidth: 500, maxHeight: boxWidth * 0.5),
                         child: Center(
                           child: Column(
+                            mainAxisSize: MainAxisSize.min,
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               CircularProgressIndicator(
@@ -1292,53 +1308,56 @@ class _QRScannerPageState extends State<QRScannerPage> {
                     final bool isEntered = snapshot.data?[0] ?? false;
                     final bool isExited = snapshot.data?[1] ?? false;
                     final String timeSlot = snapshot.data?[2] ?? '';
+                    final bool isFailed2 = !isEntered && !isExited && timeSlot == "error";
 
-                    final startTimeString = timeSlot.split(' - ').first;
-                    final endTimeString = timeSlot.split(' - ').last;
+                    if (timeSlot.toLowerCase() != "extra") {
+                      final startTimeString = timeSlot.replaceAll(" ", "").split('-').first;
+                      final endTimeString = timeSlot.replaceAll(" ", "").split('-').last;
 
-                    // Parse time in format like "10:00" or "10:00 AM"
-                    final startTimeParts = startTimeString.split(':');
-                    final endTimeParts = endTimeString.split(':');
-                    
-                    int startHour = 0;
-                    int startMinute = 0;
-                    int endHour = 0;
-                    int endMinute = 0;
-                    
-                    if (startTimeParts.length >= 2) {
-                      startHour = int.tryParse(startTimeParts[0]) ?? 0;
-                      // Handle cases like "10:00 AM" by extracting just the number part
-                      String minuteStr = startTimeParts[1].replaceAll(RegExp(r'[^0-9]'), '');
-                      startMinute = int.tryParse(minuteStr) ?? 0;
+                      // Parse time in format like "10:00" or "10:00 AM"
+                      final startTimeParts = startTimeString.split(':');
+                      final endTimeParts = endTimeString.split(':');
                       
-                      // Check for AM/PM
-                      if (startTimeString.toLowerCase().contains('pm') && startHour < 12) {
-                        startHour += 12;
-                      }
-                      if (startTimeString.toLowerCase().contains('am') && startHour == 12) {
-                        startHour = 0;
-                      }
-                    }
-                    
-                    if (endTimeParts.length >= 2) {
-                      endHour = int.tryParse(endTimeParts[0]) ?? 0;
-                      // Handle cases like "11:00 AM" by extracting just the number part
-                      String minuteStr = endTimeParts[1].replaceAll(RegExp(r'[^0-9]'), '');
-                      endMinute = int.tryParse(minuteStr) ?? 0;
+                      int startHour = 0;
+                      int startMinute = 0;
+                      int endHour = 0;
+                      int endMinute = 0;
                       
-                      // Check for AM/PM
-                      if (endTimeString.toLowerCase().contains('pm') && endHour < 12) {
-                        endHour += 12;
+                      if (startTimeParts.length >= 2) {
+                        startHour = int.tryParse(startTimeParts[0]) ?? 0;
+                        // Handle cases like "10:00 AM" by extracting just the number part
+                        String minuteStr = startTimeParts[1].replaceAll(RegExp(r'[^0-9]'), '');
+                        startMinute = int.tryParse(minuteStr) ?? 0;
+                        
+                        // Check for AM/PM
+                        if (startTimeString.toLowerCase().contains('pm') && startHour < 12) {
+                          startHour += 12;
+                        }
+                        if (startTimeString.toLowerCase().contains('am') && startHour == 12) {
+                          startHour = 0;
+                        }
                       }
-                      if (endTimeString.toLowerCase().contains('am') && endHour == 12) {
-                        endHour = 0;
+                      
+                      if (endTimeParts.length >= 2) {
+                        endHour = int.tryParse(endTimeParts[0]) ?? 0;
+                        // Handle cases like "11:00 AM" by extracting just the number part
+                        String minuteStr = endTimeParts[1].replaceAll(RegExp(r'[^0-9]'), '');
+                        endMinute = int.tryParse(minuteStr) ?? 0;
+                        
+                        // Check for AM/PM
+                        if (endTimeString.toLowerCase().contains('pm') && endHour < 12) {
+                          endHour += 12;
+                        }
+                        if (endTimeString.toLowerCase().contains('am') && endHour == 12) {
+                          endHour = 0;
+                        }
                       }
+
+                      timeSlotStart = DateTime(now.year, now.month, now.day, startHour, startMinute);
+                      timeSlotEnd = DateTime(now.year, now.month, now.day, endHour, endMinute);
                     }
 
-                    timeSlotStart = DateTime(now.year, now.month, now.day, startHour, startMinute);
-                    timeSlotEnd = DateTime(now.year, now.month, now.day, endHour, endMinute);
-
-                    final isTimeMatch = (now.isAfter(timeSlotStart) || now.isAtSameMomentAs(timeSlotStart)) && now.isBefore(timeSlotEnd) || manualCheckingMode;
+                    final isTimeMatch = (now.isAfter(timeSlotStart) || now.isAtSameMomentAs(timeSlotStart)) && now.isBefore(timeSlotEnd) || manualCheckingMode || timeSlot.toLowerCase() == "extra";
 
                     final isDelayed = timeSlotRaw != timeSlot;
 
@@ -1358,265 +1377,332 @@ class _QRScannerPageState extends State<QRScannerPage> {
                       gradientColors = [Colors.green.shade300, Colors.green.shade500];
                     }
                     
-                    return Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Colored top section with icon
-                        Stack(
-                          clipBehavior: Clip.none,
-                          alignment: Alignment.bottomCenter,
+                    return StatefulBuilder(
+                      builder: (context, setDialogState) {
+                        return Column(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            // Gradient background
-                            Container(
-                              width: double.infinity,
-                              height: boxWidth * 0.275 * 1.25,
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: gradientColors,
-                                ),
-                              ),
-                            ),
-                            // Centered status icon - positioned to overlap gradient and content
-                            Positioned(
-                              bottom: -(boxWidth * 0.275) / 2,
-                              child: Container(
-                                width: boxWidth * 0.275,
-                                height: boxWidth * 0.275,
-                                padding: EdgeInsets.all(boxWidth*0.05),
-                                decoration: BoxDecoration(
-                                  color: AppColors.backgroundLight,
-                                  shape: BoxShape.circle,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: AppColors.primaryLight.withOpacity(0.1),
-                                      blurRadius: 12,
-                                      spreadRadius: 1,
-                                      offset: Offset(0, 3),
-                                    ),
-                                  ],
-                                ),
-                                child: FittedBox(
-                                  fit: BoxFit.contain,
-                                  alignment: Alignment.center,
-                                  child: ShaderMask(
-                                    shaderCallback: (Rect bounds) {
-                                      return LinearGradient(
-                                        colors: gradientColors,
-                                        begin: Alignment.topLeft,
-                                        end: Alignment.bottomRight,
-                                      ).createShader(bounds);
-                                    },
-                                    child: Icon(
-                                      hasWarnings ? Icons.warning_rounded : 
-                                      isEntered ? Icons.exit_to_app : Icons.login_rounded,
-                                      color: AppColors.backgroundLight,
+                            // Colored top section with icon
+                            Stack(
+                              clipBehavior: Clip.none,
+                              alignment: Alignment.bottomCenter,
+                              children: [
+                                // Gradient background
+                                Container(
+                                  width: double.infinity,
+                                  height: boxWidth * 0.275 * 1.25,
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                      colors: isSending ? [Colors.grey.shade300, Colors.grey.shade500] : isSuccess ? [Colors.green.shade300, Colors.green.shade500] : (isFailed || isFailed2) ? [Colors.red.shade300, Colors.red.shade500] : gradientColors,
                                     ),
                                   ),
                                 ),
+                                // Centered status icon
+                                Positioned(
+                                  bottom: -(boxWidth * 0.275) / 2,
+                                  child: Container(
+                                    width: boxWidth * 0.275,
+                                    height: boxWidth * 0.275,
+                                    padding: EdgeInsets.all(boxWidth*0.05),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.backgroundLight,
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: AppColors.primaryLight.withOpacity(0.1),
+                                          blurRadius: 12,
+                                          spreadRadius: 1,
+                                          offset: Offset(0, 3),
+                                        ),
+                                      ],
+                                    ),
+                                    child: FittedBox(
+                                      fit: BoxFit.contain,
+                                      alignment: Alignment.center,
+                                      child: ShaderMask(
+                                        shaderCallback: (Rect bounds) {
+                                          return LinearGradient(
+                                            colors: isSending ? [Colors.grey.shade300, Colors.grey.shade500] : isSuccess ? [Colors.green.shade300, Colors.green.shade500] : (isFailed || isFailed2) ? [Colors.red.shade300, Colors.red.shade500] : gradientColors,
+                                            begin: Alignment.topLeft,
+                                            end: Alignment.bottomRight,
+                                          ).createShader(bounds);
+                                        },
+                                        child: isSending 
+                                          ? Container(
+                                            padding: EdgeInsets.all(boxWidth * 0.025),
+                                            child: CircularProgressIndicator(
+                                              color: AppColors.primaryLight,
+                                            ),
+                                            )
+                                          : isSuccess 
+                                          ? Icon(
+                                            Icons.check_rounded,
+                                            color: AppColors.backgroundLight,
+                                          )
+                                          : (isFailed || isFailed2) 
+                                          ? Icon(
+                                            Icons.error_rounded,
+                                            color: AppColors.backgroundLight,
+                                          )
+                                          : Icon(
+                                            hasWarnings ? Icons.warning_rounded : 
+                                            isEntered ? Icons.exit_to_app : Icons.login_rounded,
+                                            color: AppColors.backgroundLight,
+                                          )
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            
+                            // Content section - add padding at top for the overlapping icon
+                            Container(
+                              padding: EdgeInsets.fromLTRB(boxWidth * 0.1, (boxWidth * 0.275)/2 + 15, boxWidth * 0.1, boxWidth * 0.1),
+                              width: double.infinity,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Header
+                                  Center(
+                                    child: Text(
+                                      isSending ? 'Sending Data...' : isSuccess ? 'Success' : (isFailed || isFailed2) ? 'Failed' : 'Visitor Details',
+                                      style: TextStyle(
+                                        fontSize: boxWidth * 0.1,
+                                        fontWeight: FontWeight.bold,
+                                        color: AppColors.primaryLight,
+                                      ),
+                                    ),
+                                  ),
+
+                                  if (isFailed2 || isFailed)
+                                    Center(
+                                      child: Text(
+                                        isFailed2 ? "Failed Accessing Sheets" : "Failed Sending Data",
+                                        style: TextStyle(
+                                          fontSize: boxWidth * 0.05,
+                                          fontWeight: FontWeight.w400,
+                                          color: AppColors.primaryLight,
+                                        ),
+                                      ),
+                                    ),
+                                  
+                                  const SizedBox(height: 20),
+                                  
+                                  // Scrollable content area
+                                  if (!isSending && !isSuccess && !(isFailed || isFailed2))
+                                    Container(
+                                      constraints: BoxConstraints(
+                                        maxHeight: MediaQuery.of(context).size.height * 0.5, // Limit height to 50% of screen
+                                      ),
+                                      child: SingleChildScrollView(
+                                        physics: ClampingScrollPhysics(),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            // Date & Time
+                                            Row(
+                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                              children: [
+                                                Expanded(
+                                                  flex: 1,
+                                                  child: _infoColumn('Date', date, false, boxWidth, !isDateMatch, false),
+                                                ),
+                                                SizedBox(width: boxWidth * 0.045),
+                                                Expanded(
+                                                  flex: 1,
+                                                  child: _infoColumn('Time Slot', timeSlot, false, boxWidth, !isTimeMatch, isDelayed),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 20),
+                                
+                                            // Queue Number - Ensure left alignment
+                                            Align(
+                                              alignment: Alignment.centerLeft,
+                                              child: _infoColumn('Queue Number', queueNumber, true, boxWidth, false, false),
+                                            ),
+                                            const SizedBox(height: 20),
+                                            
+                                            // Warning Section
+                                            if (hasWarnings || (isEntered && !isExited && !isTimeMatch))
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.red.withOpacity(0.1),
+                                                  borderRadius: BorderRadius.circular(10),
+                                                  border: Border.all(color: Colors.red.withOpacity(0.3)),
+                                                ),
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons.warning_amber_rounded, 
+                                                          color: Colors.red,
+                                                          size: boxWidth * 0.065,
+                                                        ),
+                                                        const SizedBox(width: 6),
+                                                        Text(
+                                                          'Warning',
+                                                          style: TextStyle(
+                                                            color: Colors.red,
+                                                            fontWeight: FontWeight.w600,
+                                                            fontSize: boxWidth * 0.06,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 8),
+                                                    if (!isDateMatch)
+                                                      _buildWarningItem('The date does not match today\'s date (Today: $todayFormatted)', boxWidth),
+                                                    if (!isTimeMatch && !isEntered)
+                                                      _buildWarningItem('This ticket is scheduled for $timeSlot', boxWidth),
+                                                    if (!isTimeMatch && isEntered)
+                                                      _buildWarningItem('This visitor has exceeded the time limit', boxWidth),
+                                                    if (isExited)
+                                                      _buildWarningItem('This ticket has already been used', boxWidth),
+                                                  ],
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  
+                      
+                                  // Buttons
+                                  if (!isSending) ...[
+
+                                    if (!isSuccess && !(isFailed || isFailed2))
+                                      const SizedBox(height: 20),
+                                    
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        // Close button
+                                        Expanded(
+                                          child: OutlinedButton(
+                                            onPressed: () {
+                                              Navigator.of(context).pop();
+                                              Future.delayed(Duration(milliseconds: 100), () {
+                                                setState(() {
+                                                  isDialogShowing = false;
+                                                  isScannerActive = true; // Reactivate scanner when closing dialog
+                                                  isSending = false;
+                                                  isSuccess = false;
+                                                  isFailed = false;
+                                                });
+                                              });
+                                            },
+                                            style: OutlinedButton.styleFrom(
+                                              foregroundColor: Colors.blue,
+                                              side: const BorderSide(color: Colors.blue),
+                                              padding: const EdgeInsets.symmetric(vertical: 16),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.circular(32),
+                                              ),
+                                            ),
+                                            child: Text(
+                                              'Close',
+                                              style: TextStyle(
+                                                fontSize: boxWidth * 0.055,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        
+                                        // Add action button only if there are no warnings
+                                        if (!hasWarnings && !(isFailed || isFailed2) && !isSuccess) ...[
+                                          const SizedBox(width: 12),
+                                          
+                                          // Accept button
+                                          Expanded(
+                                            child: TextButton(
+                                              onPressed: isEntered
+                                                ? () async {
+                                                  setDialogState(() {
+                                                    isSending = true;
+                                                  });
+                                                  // Handle exit action
+                                                  final success = await sendDataToSheet(
+                                                    row: int.parse(queueNumber) + (rowStart - 1) - (timeSlotTicketCount * ((int.parse(queueNumber) - 1) ~/ timeSlotTicketCount)), 
+                                                    col: _columnLetterToNumber(columnStart) + 1 + (((int.parse(queueNumber) - 1) ~/ timeSlotTicketCount) * timeSlotColumnSpacing),
+                                                    value: '✅', 
+                                                    sheetName: date
+                                                  );
+                                                  if (success) {
+                                                    setState(() {
+                                                      isSuccess = true;
+                                                      isFailed = false;
+                                                    });
+                                                  } else {
+                                                    setState(() {
+                                                      isFailed = true;
+                                                      isSuccess = false;
+                                                    });
+                                                  }
+                                                  setDialogState(() {
+                                                    isSending = false;
+                                                  });
+                                                } 
+                                                : () async {
+                                                  setDialogState(() {
+                                                    isSending = true;
+                                                  });
+                                                  // Handle entry action
+                                                  final success = await sendDataToSheet(
+                                                    row: int.parse(queueNumber) + (rowStart - 1) - (timeSlotTicketCount * ((int.parse(queueNumber) - 1) ~/ timeSlotTicketCount)), 
+                                                    col: _columnLetterToNumber(columnStart) + (((int.parse(queueNumber) - 1) ~/ timeSlotTicketCount) * timeSlotColumnSpacing), 
+                                                    value: '✅', 
+                                                    sheetName: date
+                                                  );
+                                                  if (success) {
+                                                    setState(() {
+                                                      isSuccess = true;
+                                                      isFailed = false;
+                                                    });
+                                                  } else {
+                                                    setState(() {
+                                                      isFailed = true;
+                                                      isSuccess = false;
+                                                    });
+                                                  }
+                                                  setDialogState(() {
+                                                    isSending = false;
+                                                  });
+                                                },
+                                              style: TextButton.styleFrom(
+                                                backgroundColor: isEntered ? Colors.red : Colors.green,
+                                                foregroundColor: AppColors.backgroundLight,
+                                                padding: const EdgeInsets.symmetric(vertical: 16),
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius: BorderRadius.circular(32),
+                                                ),
+                                              ),
+                                              child: Text(
+                                                isEntered ? 'Exit' : 'Enter',
+                                                style: TextStyle(
+                                                  fontSize: boxWidth * 0.055,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    )
+                                  ],
+                                ],
                               ),
                             ),
                           ],
-                        ),
-                        
-                        // Content section - add padding at top for the overlapping icon
-                        Container(
-                          padding: EdgeInsets.fromLTRB(32, (boxWidth * 0.275)/2 + 15, 32, 32),
-                          width: double.infinity,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Header
-                              Center(
-                                child: Text(
-                                  'Visitor Details',
-                                  style: TextStyle(
-                                    fontSize: boxWidth * 0.1,
-                                    fontWeight: FontWeight.bold,
-                                    color: AppColors.primaryLight,
-                                  ),
-                                ),
-                              ),
-                              
-                              const SizedBox(height: 20),
-                              
-                              // Scrollable content area
-                              Container(
-                                constraints: BoxConstraints(
-                                  maxHeight: MediaQuery.of(context).size.height * 0.5, // Limit height to 50% of screen
-                                ),
-                                child: SingleChildScrollView(
-                                  physics: ClampingScrollPhysics(),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      // Date & Time
-                                      Row(
-                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                        children: [
-                                          Expanded(
-                                            flex: 1,
-                                            child: _infoColumn('Date', date, false, boxWidth, !isDateMatch, false),
-                                          ),
-                                          const SizedBox(width: 15),
-                                          Expanded(
-                                            flex: 1,
-                                            child: _infoColumn('Time Slot', timeSlot, false, boxWidth, !isTimeMatch, isDelayed),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 20),
-                        
-                                      // Queue Number - Ensure left alignment
-                                      Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: _infoColumn('Queue Number', queueNumber, true, boxWidth, false, false),
-                                      ),
-                                      const SizedBox(height: 20),
-                                      
-                                      // Warning Section
-                                      if (hasWarnings || (isEntered && !isExited && !isTimeMatch))
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                                          decoration: BoxDecoration(
-                                            color: Colors.red.withOpacity(0.1),
-                                            borderRadius: BorderRadius.circular(10),
-                                            border: Border.all(color: Colors.red.withOpacity(0.3)),
-                                          ),
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Row(
-                                                children: [
-                                                  Icon(
-                                                    Icons.warning_amber_rounded, 
-                                                    color: Colors.red,
-                                                    size: boxWidth * 0.065,
-                                                  ),
-                                                  const SizedBox(width: 6),
-                                                  Text(
-                                                    'Warning',
-                                                    style: TextStyle(
-                                                      color: Colors.red,
-                                                      fontWeight: FontWeight.w600,
-                                                      fontSize: boxWidth * 0.06,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                              const SizedBox(height: 8),
-                                              if (!isDateMatch)
-                                                _buildWarningItem('The date does not match today\'s date (Today: $todayFormatted)', boxWidth),
-                                              if (!isTimeMatch && !isEntered)
-                                                _buildWarningItem('This ticket is scheduled for $timeSlot', boxWidth),
-                                              if (!isTimeMatch && isEntered)
-                                                _buildWarningItem('This visitor has exceeded the time limit', boxWidth),
-                                              if (isExited)
-                                                _buildWarningItem('This ticket has already been used', boxWidth),
-                                            ],
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              
-                              const SizedBox(height: 20),
-                  
-                              // Buttons
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  // Close button
-                                  Expanded(
-                                    child: OutlinedButton(
-                                      onPressed: () {
-                                        Navigator.of(context).pop();
-                                        setState(() {
-                                          isDialogShowing = false;
-                                          isScannerActive = true; // Reactivate scanner when closing dialog
-                                        });
-                                      },
-                                      style: OutlinedButton.styleFrom(
-                                        foregroundColor: Colors.blue,
-                                        side: const BorderSide(color: Colors.blue),
-                                        padding: const EdgeInsets.symmetric(vertical: 16),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(32),
-                                        ),
-                                      ),
-                                      child: Text(
-                                        'Close',
-                                        style: TextStyle(
-                                          fontSize: boxWidth * 0.055,
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  
-                                  // Add action button only if there are no warnings
-                                  if (!hasWarnings) ...[
-                                    const SizedBox(width: 12),
-                                    
-                                    // Accept button
-                                    Expanded(
-                                      child: TextButton(
-                                        onPressed: isEntered
-                                          ? () {
-                                              // Handle exit action
-                                              sendDataToSheet(
-                                                row: int.parse(queueNumber) + (rowStart - 1) - (timeSlotTicketCount * ((int.parse(queueNumber) - 1) ~/ timeSlotTicketCount)), 
-                                                col: _columnLetterToNumber(columnStart) + 1 + (((int.parse(queueNumber) - 1) ~/ timeSlotTicketCount) * timeSlotColumnSpacing),
-                                                value: '✅', 
-                                                sheetName: date
-                                              );
-                                              Navigator.of(context).pop();
-                                              setState(() {
-                                                isDialogShowing = false;
-                                                isScannerActive = true; // Reactivate scanner when closing dialog
-                                              });
-                                            } 
-                                          : () {
-                                              // Handle entry action
-                                              sendDataToSheet(
-                                                row: int.parse(queueNumber) + (rowStart - 1) - (timeSlotTicketCount * ((int.parse(queueNumber) - 1) ~/ timeSlotTicketCount)), 
-                                                col: _columnLetterToNumber(columnStart) + (((int.parse(queueNumber) - 1) ~/ timeSlotTicketCount) * timeSlotColumnSpacing), 
-                                                value: '✅', 
-                                                sheetName: date
-                                              );
-
-                                              Navigator.of(context).pop();
-                                              setState(() {
-                                                isDialogShowing = false;
-                                                isScannerActive = true; // Reactivate scanner when closing dialog
-                                              });
-                                            },
-                                        style: TextButton.styleFrom(
-                                          backgroundColor: isEntered ? Colors.red : Colors.green,
-                                          foregroundColor: AppColors.backgroundLight,
-                                          padding: const EdgeInsets.symmetric(vertical: 16),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(32),
-                                          ),
-                                        ),
-                                        child: Text(
-                                          isEntered ? 'Exit' : 'Enter',
-                                          style: TextStyle(
-                                            fontSize: boxWidth * 0.055,
-                                            fontWeight: FontWeight.w500,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              )
-                            ],
-                          ),
-                        ),
-                      ],
+                        );
+                      }
                     );
                   },
                 );
